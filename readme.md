@@ -1123,7 +1123,7 @@ aws ecs update-service \
 
 ---
 
-## Phase 13: CloudWatch Logs & Metrics (Basic Observability)
+## Phase 13: CloudWatch Logs & Metrics
 
 ### Goal
 Implement minimum viable observability: centralized logs and key performance metrics.
@@ -1259,7 +1259,7 @@ fields @timestamp, @message
 
 ---
 
-## Phase 14: Prometheus & Grafana (Advanced Observability)
+## Phase 14: Prometheus & Grafana (Observability)
 
 ### Goal
 Implement application-level metrics collection and visualization for deep insights.
@@ -1852,6 +1852,10 @@ A production-grade, scalable e-commerce platform with:
 
 ---
 
-**Documentation Version**: 1.0  
-**Last Updated**: November 2024  
-**Maintained By**: DevOps Team
+<div align="center">
+
+**⭐ If this guide helped you, please star the repository! ⭐**
+
+Made with ❤️ for the DevOps community
+
+</div>
