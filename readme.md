@@ -29,12 +29,10 @@ proshop-v2/
 ├── gateway/            # Nginx reverse-proxy
 │   ├── dockerfile
 │   └── nginx.conf
-├── infra/              # Infrastructure as Code
-├── dockerfile          # Backend Dockerfile (root level)
+├── dockerfile          # Backend Dockerfile
 ├── docker-compose.yml
 ├── .dockerignore
 ├── .gitignore
-├── .env.example
 ├── package.json
 └── package-lock.json
 ```
@@ -87,8 +85,9 @@ COPY --from=deps /app/node_modules ./node_modules
 # Copy backend folder into /app/backend
 COPY ./backend ./backend
 
-# Create uploads dir inside container
-RUN mkdir -p /var/data/uploads
+# Create uploads dir inside container and make a symlink with /app/uploads
+RUN mkdir -p /var/data/uploads \
+    && ln -s /var/data/uploads /app/uploads
 
 EXPOSE 5000
 CMD ["node", "backend/server.js"]
@@ -313,6 +312,11 @@ JWT_SECRET=your_jwt_secret_key
 - Check order creation and payment flow
 - Review logs: `docker-compose logs -f backend-service`
 
+<img src="./screenshots/image.png">
+
+Symlink works upload of files on containers successful 
+
+<img src="./screenshots/symlink.png">
 ---
 
 ## Phase 6: Security Baseline & Trivy Image Scanning
