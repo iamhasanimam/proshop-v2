@@ -1,567 +1,1859 @@
-# ProShop eCommerce Platform (v2)
+# 15-Phase Production Deployment Plan for lauv.in
 
-> eCommerce platform built with the MERN stack & Redux.
+# Deployment of Ecommerce App on ECS 
 
-<img src="./frontend/public/images/screens.png">
+![alt text](ECS-Architecture.png)
 
-This project is part of my [MERN Stack From Scratch | eCommerce Platform](https://www.traversymedia.com/mern-stack-from-scratch) course. It is a full-featured shopping cart with PayPal & credit/debit payments.
+## Phase 1: Vision, Repository Structure & Branching Strategy
 
-This is version 2.0 of the app, which uses Redux Toolkit. The first version can be found [here](https://proshopdemo.dev)
+### Goal
+Establish a clean, maintainable codebase foundation ready for infrastructure automation and CI/CD pipelines.
 
-<!-- toc -->
+### Why This Matters
+- Clear directory structure simplifies Docker builds, ECS task definitions, and GitHub Actions workflows
+- Proper branching strategy prevents unstable code from reaching production
+- Organized structure makes onboarding and debugging significantly easier
 
-- [Features](#features)
-- [Usage](#usage)
-  - [Env Variables](#env-variables)
-  - [Install Dependencies (frontend & backend)](#install-dependencies-frontend--backend)
-  - [Run](#run)
-- [Build & Deploy](#build--deploy)
-  - [Seed Database](#seed-database)
+### Tasks
 
-* [Bug Fixes, corrections and code FAQ](#bug-fixes-corrections-and-code-faq)
-  - [BUG: Warnings on ProfileScreen](#bug-warnings-on-profilescreen)
-  - [BUG: Changing an uncontrolled input to be controlled](#bug-changing-an-uncontrolled-input-to-be-controlled)
-  - [BUG: All file types are allowed when updating product images](#bug-all-file-types-are-allowed-when-updating-product-images)
-  - [BUG: Throwing error from productControllers will not give a custom error response](#bug-throwing-error-from-productcontrollers-will-not-give-a-custom-error-response)
-    - [Original code](#original-code)
-  - [BUG: Bad responses not handled in the frontend](#bug-bad-responses-not-handled-in-the-frontend)
-    - [Example from PlaceOrderScreen.jsx](#example-from-placeorderscreenjsx)
-  - [BUG: After switching users, our new user gets the previous users cart](#bug-after-switching-users-our-new-user-gets-the-previous-users-cart)
-  - [BUG: Passing a string value to our `addDecimals` function](#bug-passing-a-string-value-to-our-adddecimals-function)
-  - [BUG: Token and Cookie expiration not handled in frontend](#bug-token-and-cookie-expiration-not-handled-in-frontend)
-  - [BUG: Calculation of prices as decimals gives odd results](#bug-calculation-of-prices-as-decimals-gives-odd-results)
-  - [FAQ: How do I use Vite instead of CRA?](#faq-how-do-i-use-vite-instead-of-cra)
-    - [Setting up the proxy](#setting-up-the-proxy)
-    - [Setting up linting](#setting-up-linting)
-    - [Vite outputs the build to /dist](#vite-outputs-the-build-to-dist)
-    - [Vite has a different script to run the dev server](#vite-has-a-different-script-to-run-the-dev-server)
-    - [A final note:](#a-final-note)
-  - [FIX: issues with LinkContainer](#fix-issues-with-linkcontainer)
-  * [License](#license)
-
-<!-- tocstop -->
-
-## Features
-
-- Full featured shopping cart
-- Product reviews and ratings
-- Top products carousel
-- Product pagination
-- Product search feature
-- User profile with orders
-- Admin product management
-- Admin user management
-- Admin Order details page
-- Mark orders as delivered option
-- Checkout process (shipping, payment method, etc)
-- PayPal / credit card integration
-- Database seeder (products & users)
-
-## Usage
-
-- Create a MongoDB database and obtain your `MongoDB URI` - [MongoDB Atlas](https://www.mongodb.com/cloud/atlas/register)
-- Create a PayPal account and obtain your `Client ID` - [PayPal Developer](https://developer.paypal.com/)
-
-### Env Variables
-
-Rename the `.env.example` file to `.env` and add the following
-
+#### Repository Structure
 ```
-NODE_ENV = development
-PORT = 5000
-MONGO_URI = your mongodb uri
-JWT_SECRET = 'abc123'
-PAYPAL_CLIENT_ID = your paypal client id
-PAGINATION_LIMIT = 8
+proshop-v2/
+├── frontend/           # React application
+│   ├── public/
+│   ├── src/
+│   ├── dockerfile
+│   ├── nginx.conf
+│   ├── package.json
+│   └── package-lock.json
+├── backend/            # Express server with MongoDB
+│   └── server.js
+├── gateway/            # Nginx reverse-proxy
+│   ├── dockerfile
+│   └── nginx.conf
+├── infra/              # Infrastructure as Code
+├── dockerfile          # Backend Dockerfile (root level)
+├── docker-compose.yml
+├── .dockerignore
+├── .gitignore
+├── .env.example
+├── package.json
+└── package-lock.json
 ```
 
-Change the JWT_SECRET and PAGINATION_LIMIT to what you want
+#### Branching Strategy
+- `main` → production-ready code only
+- `dev` → development and staging experiments
+- Feature branches → merge to `dev` first, then `main` after testing
 
-### Install Dependencies (frontend & backend)
+#### Initial Setup
+- Add comprehensive `.gitignore` for `node_modules`, `build`, `.env`, OS files
+- Document structure in root README.md
+- Set up branch protection rules for `main`
 
+---
+
+## Phase 2: Backend Dockerization (Node.js/Express)
+
+### Goal
+Create a lean, reproducible Docker image for the backend service that can run consistently across local, staging, and production environments.
+
+### Why This Matters
+- Identical image runs in development, ECS Fargate, and potential future Kubernetes clusters
+- Multi-stage builds significantly reduce final image size
+- Removes development dependencies from production runtime
+
+### Tasks
+
+#### Backend Dockerfile
+Located at root: `dockerfile` (for backend)
+
+```dockerfile
+# Stage 1: Install dependencies
+FROM node:20-alpine AS deps
+WORKDIR /app
+# Copy root package files
+COPY package*.json ./
+# Install only production deps
+RUN npm ci --omit=dev
+
+# Stage 2: Runtime
+FROM node:20-alpine AS runner
+WORKDIR /app
+# Optional but nice
+ENV NODE_ENV=production
+ENV PORT=5000
+
+# Copy installed node_modules from deps stage
+COPY --from=deps /app/node_modules ./node_modules
+# Copy backend folder into /app/backend
+COPY ./backend ./backend
+
+# Create uploads dir inside container
+RUN mkdir -p /var/data/uploads
+
+EXPOSE 5000
+CMD ["node", "backend/server.js"]
 ```
-npm install
-cd frontend
-npm install
+
+#### Verification Steps
+- Confirm `backend/server.js` listens on `process.env.PORT || 5000`
+- Verify upload path is configurable or defaults to `/var/data/uploads`
+- Test build locally: `docker build -t lauv-backend:test .`
+- Run container: `docker run -p 5000:5000 lauv-backend:test`
+
+---
+
+## Phase 3: Frontend Dockerization (React + Nginx)
+
+### Goal
+Build optimized static React assets and serve them efficiently using Nginx.
+
+### Why This Matters
+- React production builds are just static HTML/CSS/JS files
+- Nginx is extremely fast, lightweight, and industry-standard for static content
+- Separates build-time from runtime concerns
+
+### Tasks
+
+#### Frontend Dockerfile
+Located at `frontend/dockerfile`
+
+```dockerfile
+# Stage 1: Build React application
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY . .
+RUN npm run build
+
+# Stage 2: Serve with Nginx
+FROM nginx:alpine
+RUN rm /etc/nginx/conf.d/default.conf
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/build /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
 ```
 
-### Run
+#### Frontend Nginx Configuration
+Located at `frontend/nginx.conf`
 
+```nginx
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location / {
+        try_files $uri /index.html;
+    }
+}
 ```
 
-# Run frontend (:3000) & backend (:5000)
-npm run dev
+#### Key Features
+- SPA routing: all routes fall back to `index.html` for React Router
+- Efficient static file serving
+- No unnecessary redirects
 
-# Run backend only
-npm run server
+---
+
+## Phase 4: Gateway Dockerization (Central Nginx Entry Point)
+
+### Goal
+Deploy a single Nginx gateway as the entry point for all traffic, routing requests to appropriate backend services.
+
+### Why This Matters
+- Centralized control for routing, headers, logging, and security
+- Clean separation between public-facing gateway and internal services
+- Foundation for advanced features: rate limiting, request IDs, custom error pages
+- Simplifies future microservices architecture
+
+### Tasks
+
+#### Gateway Dockerfile
+Located at `gateway/dockerfile`
+
+```dockerfile
+FROM nginx:alpine
+RUN rm /etc/nginx/conf.d/default.conf
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
 ```
 
-## Build & Deploy
+#### Gateway Nginx Configuration
+Located at `gateway/nginx.conf`
 
+```nginx
+upstream frontend_upstream {
+    server frontend-service:80;
+}
+
+upstream backend_upstream {
+    server backend-service:5000;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    location / {
+        proxy_pass http://frontend_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /api/ {
+        proxy_pass http://backend_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /uploads/ {
+        proxy_pass http://backend_upstream;
+    }
+}
 ```
-# Create frontend prod build
-cd frontend
-npm run build
+
+#### Routing Logic
+- `/` → frontend service (React app)
+- `/api/` → backend service (Express API)
+- `/uploads/` → backend service (static file serving)
+
+---
+
+## Phase 5: Local Integration with Docker Compose
+
+### Goal
+Validate entire architecture locally before deploying to AWS.
+
+### Why This Matters
+- Local debugging is 10x faster than debugging in ECS
+- Confirms Dockerfiles, networking, and routing work together correctly
+- Catches configuration issues early
+- Provides development environment parity with production
+
+### Tasks
+
+#### Docker Compose Configuration
+Located at root: `docker-compose.yml`
+
+```yaml
+version: '3.8'
+
+networks:
+  public_net:
+    driver: bridge
+  app_net:
+    driver: bridge
+
+volumes:
+  uploads-data:
+
+services:
+  gateway:
+    build: ./gateway
+    container_name: lauv-nginx-gateway
+    ports:
+      - "8080:80"
+    depends_on:
+      - frontend-service
+      - backend-service
+    networks:
+      - public_net
+      - app_net
+
+  frontend-service:
+    build: ./frontend
+    container_name: lauv-frontend
+    expose:
+      - "80"
+    networks:
+      - app_net
+
+  backend-service:
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: lauv-backend
+    expose:
+      - "5000"
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      - MONGO_URI=${MONGO_URI}
+      - PAYPAL_CLIENT_ID=${PAYPAL_CLIENT_ID}
+      - JWT_SECRET=${JWT_SECRET}
+    volumes:
+      - uploads-data:/var/data/uploads
+    networks:
+      - app_net
 ```
 
-### Seed Database
+#### Environment Variables Setup
+Create `.env` file in root:
 
-You can use the following commands to seed the database with some sample users and products as well as destroy all data
-
-```
-# Import data
-npm run data:import
-
-# Destroy data
-npm run data:destroy
+```env
+MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/dbname
+PAYPAL_CLIENT_ID=your_paypal_client_id
+JWT_SECRET=your_jwt_secret_key
 ```
 
+#### Validation Checklist
+- Start all services: `docker-compose up --build`
+- Access frontend: `http://localhost:8080`
+- Test API routes: `http://localhost:8080/api/health`
+- Verify authentication flow (login/signup)
+- Test file uploads to `/uploads/`
+- Check order creation and payment flow
+- Review logs: `docker-compose logs -f backend-service`
+
+---
+
+## Phase 6: Security Baseline & Trivy Image Scanning
+
+### Goal
+Implement automated vulnerability scanning to prevent deploying images with known security issues.
+
+### Why This Matters
+- Security should be built into the pipeline, not added as an afterthought
+- Trivy detects CVEs in base images and dependencies
+- Many enterprises fail builds automatically for HIGH/CRITICAL vulnerabilities
+- Prevents known exploits from reaching production
+
+### Tasks
+
+#### Local Trivy Scan (Initial Testing)
+```bash
+# Build backend image
+docker build -t lauv-backend:local -f dockerfile .
+
+# Scan for vulnerabilities
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  aquasec/trivy:latest image lauv-backend:local
+
+# Build and scan frontend
+docker build -t lauv-frontend:local -f frontend/dockerfile ./frontend
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  aquasec/trivy:latest image lauv-frontend:local
+
+# Build and scan gateway
+docker build -t lauv-gateway:local -f gateway/dockerfile ./gateway
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  aquasec/trivy:latest image lauv-gateway:local
 ```
-Sample User Logins
 
-admin@email.com (Admin)
-123456
+#### GitHub Actions Integration
+Add to `.github/workflows/deploy.yml`
 
-john@email.com (Customer)
-123456
+```yaml
+- name: Scan backend image with Trivy
+  uses: aquasecurity/trivy-action@v0.24.0
+  with:
+    image-ref: ${{ env.BACKEND_IMAGE }}
+    severity: CRITICAL,HIGH
+    ignore-unfixed: true
+    exit-code: 1
 
-jane@email.com (Customer)
-123456
+- name: Scan frontend image with Trivy
+  uses: aquasecurity/trivy-action@v0.24.0
+  with:
+    image-ref: ${{ env.FRONTEND_IMAGE }}
+    severity: CRITICAL,HIGH
+    ignore-unfixed: true
+    exit-code: 1
+
+- name: Scan gateway image with Trivy
+  uses: aquasecurity/trivy-action@v0.24.0
+  with:
+    image-ref: ${{ env.GATEWAY_IMAGE }}
+    severity: CRITICAL,HIGH
+    ignore-unfixed: true
+    exit-code: 1
+```
+
+#### Expected Outcome
+- Pipeline fails if critical vulnerabilities detected
+- Regular base image updates to patch CVEs
+- Security reports in GitHub Actions logs
+
+---
+
+## Phase 7: AWS Networking (VPC, Subnets, Security Groups, NAT Gateway)
+
+### Goal
+Build isolated, production-grade network infrastructure for ECS and Application Load Balancer.
+
+### Why This Matters
+- ECS tasks should never be directly exposed to the internet
+- Only ALB accepts public traffic; all services live in private subnets
+- Controlled outbound access via NAT Gateway for ECR pulls and external APIs
+- Network segmentation improves security posture
+
+### Tasks
+
+#### VPC Configuration
+- Create VPC: `10.0.0.0/16` (65,536 IP addresses)
+- Name: `lauv-prod-vpc`
+- Enable DNS hostnames and DNS resolution
+
+#### Public Subnets (for ALB and NAT Gateway)
+- Public Subnet 1: `10.0.1.0/24` (Availability Zone us-east-1a)
+- Public Subnet 2: `10.0.2.0/24` (Availability Zone us-east-1b)
+- Attach Internet Gateway
+- Route table: `0.0.0.0/0` → Internet Gateway
+
+#### Private Subnets (for ECS Tasks)
+- Private Subnet 1: `10.0.11.0/24` (Availability Zone us-east-1a)
+- Private Subnet 2: `10.0.12.0/24` (Availability Zone us-east-1b)
+- Route table: `0.0.0.0/0` → NAT Gateway
+
+#### NAT Gateway
+- Deploy NAT Gateway in Public Subnet 1
+- Allocate Elastic IP
+- Purpose: allow private subnet resources to access internet for updates and external APIs
+
+#### Security Groups
+
+**sg-alb (Application Load Balancer)**
+```
+Inbound Rules:
+- Type: HTTPS, Port: 443, Source: 0.0.0.0/0 (IPv4)
+- Type: HTTPS, Port: 443, Source: ::/0 (IPv6)
+- Type: HTTP, Port: 80, Source: 0.0.0.0/0 (for redirect)
+
+Outbound Rules:
+- Type: HTTP, Port: 80, Destination: sg-ecs-app
+```
+
+**sg-ecs-app (ECS Tasks)**
+```
+Inbound Rules:
+- Type: HTTP, Port: 80, Source: sg-alb
+- Type: Custom TCP, Port: 5000, Source: sg-alb
+
+Outbound Rules:
+- Type: HTTPS, Port: 443, Destination: 0.0.0.0/0 (for ECR, MongoDB Atlas, APIs)
+```
+
+#### Architecture Flow
+```
+Internet → IGW → ALB (public subnets) → ECS Tasks (private subnets) → NAT Gateway → Internet (outbound only)
 ```
 
 ---
 
-# Bug Fixes, corrections and code FAQ
+## Phase 8: ECR Repository Setup & Initial Image Push
 
-The code here in the main branch has been updated since the course was published to fix bugs found by students of the course and answer common questions, if you are looking to compare your code to that from the course lessons then
-please refer to the [originalcoursecode](https://github.com/bradtraversy/proshop-v2/tree/originalCourseCode) branch of this repository.
+### Goal
+Establish centralized Docker registry for all container images.
 
-There are detailed notes in the comments that will hopefully help you understand
-and adopt the changes and corrections.
-An easy way of seeing all the changes and fixes is to use a note highlighter
-extension such as [This one for VSCode](https://marketplace.visualstudio.com/items?itemName=wayou.vscode-todo-highlight) or [this one for Vim](https://github.com/folke/todo-comments.nvim) Where by you can easily list all the **NOTE:** and **FIX:** tags in the comments.
+### Why This Matters
+- ECS pulls images directly from ECR within AWS private network
+- Fast, secure image distribution
+- Version control and image lifecycle policies
+- Simplifies rollbacks and blue/green deployments
 
-### BUG: Warnings on ProfileScreen
+### Tasks
 
-We see the following warning in the browser console..
-
-`<tD> cannot appear as a child of <tr>.`
-
-and
-
-`warning: Received 'true' for a non-boolean attribute table.`
-
-> Code changes can be seen in [ProfileScreen.jsx](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/screens/ProfileScreen.jsx)
-
-### BUG: Changing an uncontrolled input to be controlled
-
-In our SearchBox input, it's possible that our `urlKeyword` is **undefined**, in
-which case our initial state will be **undefined** and we will have an
-uncontrolled input initially i.e. not bound to state.
-In the case of `urlKeyword` being **undefined** we can set state to an empty
-string.
-
-> Code changes can be seen in [SearchBox.jsx](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/components/SearchBox.jsx)
-
-### BUG: All file types are allowed when updating product images
-
-When updating and uploading product images as an Admin user, all file types are allowed. We only want to upload image files. This is fixed by using a fileFilter function and sending back an appropriate error when the wrong file type is uploaded.
-
-You may see that our `checkFileType` function is declared but never actually
-used, this change fixes that. The function has been renamed to `fileFilter` and
-passed to the instance of [ multer ](https://github.com/expressjs/multer#filefilter)
-
-> Code changes can be seen in [uploadRoutes.js](https://github.com/bradtraversy/proshop-v2/tree/main/backend/routes/uploadRoutes.js)
-
-### BUG: Throwing error from productControllers will not give a custom error response
-
-In section **3 - Custom Error Middleware** we throw an error from our
-`getProductById` controller function, with a _custom_ message.
-However if we have a invalid **ObjectId** as `req.params.id` and use that to
-query our products in the database, Mongoose will throw an error before we
-reach the line of code where we throw our own error.
-
-#### Original code
-
-```js
-const getProductById = asyncHandler(async (req, res) => {
-  const product = await Product.findById(req.params.id);
-  if (product) {
-    return res.json(product);
-  }
-  // NOTE: the following will never run if we have an invalid ObjectId
-  res.status(404);
-  throw new Error('Resource not found');
-});
+#### Create ECR Repositories
+```bash
+aws ecr create-repository --repository-name lauv-frontend --region us-east-1
+aws ecr create-repository --repository-name lauv-backend --region us-east-1
+aws ecr create-repository --repository-name lauv-nginx-gateway --region us-east-1
 ```
 
-Instead what we can do is if we do want to check for an invalid ObjectId is use
-a built in method from Mongoose - [isValidObjectId](<https://mongoosejs.com/docs/api/mongoose.html#Mongoose.prototype.isValidObjectId()>)
-There are a number of places in the project where we may want to check we are
-getting a valid ObjectId, so we can extract this logic to it's own middleware
-and drop it in to any route handler that needs it.  
-This also removes the need to check for a cast error in our errorMiddleware and
-is a little more explicit in checking for such an error.
-
-> Changes can be seen in [errorMiddleware.js](https://github.com/bradtraversy/proshop-v2/tree/main/backend/middleware/errorMiddleware.js), [productRoutes.js](https://github.com/bradtraversy/proshop-v2/tree/main/backend/routes/productRoutes.js), [productController.js](https://github.com/bradtraversy/proshop-v2/tree/main/backend/controllers/productController.js) and [checkObjectId.js](https://github.com/bradtraversy/proshop-v2/tree/main/backend/middleware/checkObjectId.js)
-
-### BUG: Bad responses not handled in the frontend
-
-There are a few cases in our frontend where if we get a bad response from our
-API then we try and render the error object.
-This you cannot do in React - if you are seeing an error along the lines of
-**Objects are not valid as a React child** and the app breaks for you, then this
-is likely the fix you need.
-
-#### Example from PlaceOrderScreen.jsx
-
-```jsx
-<ListGroup.Item>
-  {error && <Message variant='danger'>{error}</Message>}
-</ListGroup.Item>
-```
-
-In the above code we check for a error that we get from our [useMutation](https://redux-toolkit.js.org/rtk-query/usage/mutations)
-hook. This will be an object though which we cannot render in React, so here we
-need the message we sent back from our API server...
-
-```jsx
-<ListGroup.Item>
-  {error && <Message variant='danger'>{error.data.message}</Message>}
-</ListGroup.Item>
-```
-
-The same is true for [handling errors from our RTK queries.](https://redux-toolkit.js.org/rtk-query/usage/error-handling)
-
-> Changes can be seen in:-
->
-> - [PlaceOrderScreen.jsx](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/screens/PlaceOrderScreen.jsx)
-> - [OrderScreen.jsx](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/screens/OrderScreen.jsx)
-> - [ProductEditScreen.jsx](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/screens/admin/ProductEditScreen.jsx)
-> - [ProductListScreen.jsx](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/screens/admin/ProductListScreen.jsx)
-
-### BUG: After switching users, our new user gets the previous users cart
-
-When our user logs out we clear **userInfo** and **expirationTime** from local
-storage but not the **cart**.  
-So when we log in with a different user, they _inherit_ the previous users cart
-and shipping information.
-
-The solution is to simply clear local storage entirely and so remove the
-**cart**, **userInfo** and **expirationTime**.
-
-> Changes can be seen in:-
->
-> - [authSlice.js](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/slices/authSlice.js)
-> - [cartSlice.js](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/slices/cartSlice.js)
-> - [Header.jsx](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/components/Header.jsx)
-
-### BUG: Passing a string value to our `addDecimals` function
-
-Our `addDecimals` function expects a **Number** type as an argument so calling
-it by passing a **String** type as the argument could produce some issues.
-It kind of works because JavaScript type coerces the string to a number when we
-try to use mathematic operators on strings. But this is prone to error and can
-be improved.
-
-> Changes can be seen in:
->
-> - [cartUtils.js](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/utils/cartUtils.js)
-> - [calcPrices.js](https://github.com/bradtraversy/proshop-v2/tree/main/backend/utils/calcPrices.js)
-
-### BUG: Token and Cookie expiration not handled in frontend
-
-The cookie and the JWT expire after 30 days.
-However for our private routing in the client our react app simply trusts that if we have a user in local storage, then that user is authenticated.
-So we have a situation where in the client they can access private routes, but the API calls to the server fail because there is no cookie with a valid JWT.
-
-The solution is to wrap/customize the RTK [baseQuery](https://redux-toolkit.js.org/rtk-query/usage/customizing-queries#customizing-queries-with-basequery) with our own custom functionality that will log out a user on any 401 response
-
-> Changes can be seein in:
->
-> - [apiSlice.js](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/slices/apiSlice.js)
-
-Additionally we can remove the following code:
-
-```js
-const expirationTime = new Date().getTime() + 30 * 24 * 60 * 60 * 1000; // 30 days
-localStorage.setItem('expirationTime', expirationTime);
-```
-
-from our [authSlice.js](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/slices/authSlice.js) as it's never
-actually used in the project in any way.
-
-### BUG: Calculation of prices as decimals gives odd results
-
-JavaSCript uses floating point numbers for decimals which can give some funky
-results for example:
-
-```js
-0.1 + 0.2; // 0.30000000000000004 🤯
-```
-
-Or a more specific example in our application would be that our airpods have a
-`price: 89.99` and if we do:
-
-```js
-3 * 89.99; // 269.96999999999997
-```
-
-The solution would be to calculate prices in whole numbers:
-
-```js
-(3 * (89.99 * 100)) / 100; // 269.97
-```
-
-> Changes can be see in in:
->
-> - [PlaceOrderScreen.jsx](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/screens/PlaceOrderScreen.jsx)
-> - [cartUtils.js](https://github.com/bradtraversy/proshop-v2/tree/main/frontend/src/utils/cartUtils.js)
-> - [calcPrices.js](https://github.com/bradtraversy/proshop-v2/tree/main/backend/utils/calcPrices.js)
-
-### FAQ: How do I use Vite instead of CRA?
-
-Ok so you're at **Section 1 - Starting The Frontend** in the course and you've
-heard cool things about [Vite](https://vitejs.dev/) and why you should use that
-instead of [Create React App](https://create-react-app.dev/) in 2023.
-
-There are a few differences you need to be aware of using Vite in place of CRA
-here in the course after [scaffolding out your Vite React app](https://github.com/vitejs/vite/tree/main/packages/create-vite#create-vite)
-
-#### Setting up the proxy
-
-Using CRA we have a `"proxy"` setting in our frontend/package.json to avoid
-breaking the browser [Same Origin Policy](https://developer.mozilla.org/en-US/docs/Web/Security/Same-origin_policy) in development.
-In Vite we have to set up our proxy in our
-[vite.config.js](https://vitejs.dev/config/server-options.html#server-proxy).
-
-```js
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    // proxy requests prefixed '/api' and '/uploads'
-    proxy: {
-      '/api': 'http://localhost:5000',
-      '/uploads': 'http://localhost:5000',
-    },
-  },
-});
-```
-
-#### Setting up linting
-
-By default CRA outputs linting from eslint to your terminal and browser console.
-To get Vite to ouput linting to the terminal you need to add a [plugin](https://www.npmjs.com/package/vite-plugin-eslint) as a
-development dependency...
+#### Configure Repository Policies
+- Scan on push: enabled
+- Tag immutability: recommended for production
+- Lifecycle policies: retain last 10 images, delete untagged after 7 days
 
 ```bash
-npm i -D vite-plugin-eslint
+# Enable scan on push
+aws ecr put-image-scanning-configuration \
+  --repository-name lauv-backend \
+  --image-scanning-configuration scanOnPush=true
 
+# Set lifecycle policy
+aws ecr put-lifecycle-policy \
+  --repository-name lauv-backend \
+  --lifecycle-policy-text '{
+    "rules": [{
+      "rulePriority": 1,
+      "description": "Keep last 10 images",
+      "selection": {
+        "tagStatus": "any",
+        "countType": "imageCountMoreThan",
+        "countNumber": 10
+      },
+      "action": { "type": "expire" }
+    }]
+  }'
 ```
 
-Then add the plugin to your **vite.config.js**
-
-```js
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-// import the plugin
-import eslintPlugin from 'vite-plugin-eslint';
-
-export default defineConfig({
-  plugins: [
-    react(),
-    eslintPlugin({
-      // setup the plugin
-      cache: false,
-      include: ['./src/**/*.js', './src/**/*.jsx'],
-      exclude: [],
-    }),
-  ],
-  server: {
-    proxy: {
-      '/api': 'http://localhost:5000',
-      '/uploads': 'http://localhost:5000',
-    },
-  },
-});
+#### Authenticate Docker to ECR
+```bash
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin \
+  <account-id>.dkr.ecr.us-east-1.amazonaws.com
 ```
 
-By default the eslint config that comes with a Vite React project treats some
-rules from React as errors which will break your app if you are following Brad exactly.
-You can change those rules to give a warning instead of an error by modifying
-the **eslintrc.cjs** that came with your Vite project.
+#### Tag and Push Images
+```bash
+# Backend
+docker build -t lauv-backend:v1 -f dockerfile .
+docker tag lauv-backend:v1 \
+  <account-id>.dkr.ecr.us-east-1.amazonaws.com/lauv-backend:v1
+docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/lauv-backend:v1
 
-```js
-module.exports = {
-  env: { browser: true, es2020: true },
-  extends: [
-    'eslint:recommended',
-    'plugin:react/recommended',
-    'plugin:react/jsx-runtime',
-    'plugin:react-hooks/recommended',
-  ],
-  parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
-  settings: { react: { version: '18.2' } },
-  plugins: ['react-refresh'],
-  rules: {
-    // turn this one off
-    'react/prop-types': 'off',
-    // change these errors to warnings
-    'react-refresh/only-export-components': 'warn',
-    'no-unused-vars': 'warn',
-  },
-};
+# Frontend
+docker build -t lauv-frontend:v1 -f frontend/dockerfile ./frontend
+docker tag lauv-frontend:v1 \
+  <account-id>.dkr.ecr.us-east-1.amazonaws.com/lauv-frontend:v1
+docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/lauv-frontend:v1
+
+# Gateway
+docker build -t lauv-nginx-gateway:v1 -f gateway/dockerfile ./gateway
+docker tag lauv-nginx-gateway:v1 \
+  <account-id>.dkr.ecr.us-east-1.amazonaws.com/lauv-nginx-gateway:v1
+docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/lauv-nginx-gateway:v1
 ```
-
-#### Vite outputs the build to /dist
-
-Create React App by default outputs the build to a **/build** directory and this is
-what we serve from our backend in production.  
-Vite by default outputs the build to a **/dist** directory so we need to make
-some adjustments to our [backend/server.js](https://github.com/bradtraversy/proshop-v2/tree/main/backend/server.js)
-Change...
-
-```js
-app.use(express.static(path.join(__dirname, '/frontend/build')));
-```
-
-to...
-
-```js
-app.use(express.static(path.join(__dirname, '/frontend/dist')));
-```
-
-and...
-
-```js
-app.get('*', (req, res) =>
-  res.sendFile(path.resolve(__dirname, 'frontend', 'build', 'index.html'))
-);
-```
-
-to...
-
-```js
-app.get('*', (req, res) =>
-  res.sendFile(path.resolve(__dirname, 'frontend', 'dist', 'index.html'))
-);
-```
-
-#### Vite has a different script to run the dev server
-
-In a CRA project you run `npm start` to run the development server, in Vite you
-start the development server with `npm run dev`  
-If you are using the **dev** script in your root pacakge.json to run the project
-using concurrently, then you will also need to change your root package.json
-scripts from...
-
-```json
-    "client": "npm start --prefix frontend",
-```
-
-to...
-
-```json
-    "client": "npm run dev --prefix frontend",
-```
-
-Or you can if you wish change the frontend/package.json scripts to use `npm
-start`...
-
-```json
-    "start": "vite",
-```
-
-#### A final note:
-
-Vite requires you to name React component files using the `.jsx` file
-type, so you won't be able to use `.js` for your components. The entry point to
-your app will be in `main.jsx` instead of `index.js`
-
-And that's it! You should be good to go with the course using Vite.
-
-### FIX: issues with LinkContainer
-
-The `LinkContainer` component from [react-router-bootstrap](https://github.com/react-bootstrap/react-router-bootstrap) was used to wrap React Routers `Link` component for convenient integration between React Router and styling with Bootstrap.  
-However **react-router-bootstrap** hasn't kept up with React and you may see
-warnings in your console along the lines of:
-
-```
- LinkContainer: Support for defaultProps will be removed from function components in a future major release. Use JavaScript default parameters instead.
-```
-
-Which is because React is removing default component props in favour of using
-default function parameters and `LinkContainer` still uses
-`Component.defaultProps`.  
-However you don't really need `LinkContainer` as we can simply use the `as` prop
-on any React Bootstrap component to render any element of your choice, including
-React Routers `Link` component.
-
-For example in our [Header.jsx](frontend/src/components/Header.jsx) we can first
-import `Link`:
-
-```jsx
-import { useNavigate, Link } from 'react-router-dom';
-```
-
-Then instead of using `LinkContainer`:
-
-```jsx
-<LinkContainer to='/'>
-  <Navbar.Brand>
-    <img src={logo} alt='ProShop' />
-    ProShop
-  </Navbar.Brand>
-</LinkContainer>
-```
-
-We can remove `LinkContainer` and use the **as** prop on the `Navbar.Brand`
-
-```jsx
-<Navbar.Brand as={Link} to='/'>
-  <img src={logo} alt='ProShop' />
-  ProShop
-</Navbar.Brand>
-```
-
-> **Changes can be seen in:**
->
-> - [Header.jsx](frontend/src/components/Header.jsx)
-> - [CheckoutSteps.jsx](frontend/src/components/CheckoutSteps.jsx)
-> - [Paginate.jsx](frontend/src/components/Paginate.jsx)
-> - [ProfileScreen.jsx](frontend/src/screens/ProfileScreen.jsx)
-> - [OrderListScreen.jsx](frontend/src/screens/admin/OrderListScreen.jsx)
-> - [ProductListScreen.jsx](frontend/src/screens/admin/ProductListScreen.jsx)
-> - [UserListScreen.jsx](frontend/src/screens/admin/UserListScreen.jsx)
-
-After these changes you can then remove **react-router-bootstrap** from your
-dependencies in [frontend/package.json](frontend/package.json)
 
 ---
 
-## License
+## Phase 9: ECS Fargate Cluster & Task Definitions
 
-The MIT License
+### Goal
+Deploy containers as managed, serverless tasks in private subnets using AWS Fargate.
 
-Copyright (c) 2023 Traversy Media https://traversymedia.com
+### Why Fargate
+- No EC2 instance management required
+- Pay only for resources tasks consume
+- Automatic scaling and high availability
+- Simplified operations and maintenance
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+### Tasks
 
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
+#### Create ECS Cluster
+```bash
+aws ecs create-cluster --cluster-name lauv-prod-cluster --region us-east-1
+```
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
+#### Task Execution Role
+Create IAM role `ecsTaskExecutionRole` with policies:
+- `AmazonECSTaskExecutionRolePolicy` (ECR pull, CloudWatch logs)
+- Custom policy for SSM Parameter Store access
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ],
+      "Resource": "arn:aws:ssm:us-east-1:<account-id>:parameter/lauv/prod/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:<account-id>:key/*"
+    }
+  ]
+}
+```
+
+#### Task Role
+Additional permissions for application runtime:
+- S3 access (if needed for uploads)
+- SES for emails
+- Any other AWS service integrations
+
+#### Backend Task Definition
+Create file: `infra/backend-task-definition.json`
+
+```json
+{
+  "family": "lauv-backend-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::<account-id>:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::<account-id>:role/ecsTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "backend",
+      "image": "<account-id>.dkr.ecr.us-east-1.amazonaws.com/lauv-backend:latest",
+      "portMappings": [
+        {
+          "containerPort": 5000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {"name": "NODE_ENV", "value": "production"},
+        {"name": "PORT", "value": "5000"}
+      ],
+      "secrets": [
+        {
+          "name": "MONGO_URI",
+          "valueFrom": "arn:aws:ssm:us-east-1:<account-id>:parameter/lauv/prod/MONGO_URI"
+        },
+        {
+          "name": "JWT_SECRET",
+          "valueFrom": "arn:aws:ssm:us-east-1:<account-id>:parameter/lauv/prod/JWT_SECRET"
+        },
+        {
+          "name": "PAYPAL_CLIENT_ID",
+          "valueFrom": "arn:aws:ssm:us-east-1:<account-id>:parameter/lauv/prod/PAYPAL_CLIENT_ID"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/lauv-backend",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
+```
+
+Register task definition:
+```bash
+aws ecs register-task-definition \
+  --cli-input-json file://infra/backend-task-definition.json
+```
+
+#### Frontend Task Definition
+Create file: `infra/frontend-task-definition.json`
+
+```json
+{
+  "family": "lauv-frontend-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::<account-id>:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "frontend",
+      "image": "<account-id>.dkr.ecr.us-east-1.amazonaws.com/lauv-frontend:latest",
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/lauv-frontend",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
+```
+
+#### Gateway Task Definition
+Create file: `infra/gateway-task-definition.json`
+
+```json
+{
+  "family": "lauv-gateway-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::<account-id>:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "gateway",
+      "image": "<account-id>.dkr.ecr.us-east-1.amazonaws.com/lauv-nginx-gateway:latest",
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/lauv-gateway",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
+```
+
+#### Create CloudWatch Log Groups
+```bash
+aws logs create-log-group --log-group-name /ecs/lauv-backend
+aws logs create-log-group --log-group-name /ecs/lauv-frontend
+aws logs create-log-group --log-group-name /ecs/lauv-gateway
+```
+
+#### Create ECS Services
+```bash
+# Backend service
+aws ecs create-service \
+  --cluster lauv-prod-cluster \
+  --service-name lauv-backend-service \
+  --task-definition lauv-backend-task \
+  --desired-count 2 \
+  --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={
+    subnets=[subnet-xxx,subnet-yyy],
+    securityGroups=[sg-ecs-app],
+    assignPublicIp=DISABLED
+  }"
+
+# Frontend service
+aws ecs create-service \
+  --cluster lauv-prod-cluster \
+  --service-name lauv-frontend-service \
+  --task-definition lauv-frontend-task \
+  --desired-count 2 \
+  --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={
+    subnets=[subnet-xxx,subnet-yyy],
+    securityGroups=[sg-ecs-app],
+    assignPublicIp=DISABLED
+  }"
+
+# Gateway service (will be registered with ALB target group)
+aws ecs create-service \
+  --cluster lauv-prod-cluster \
+  --service-name lauv-gateway-service \
+  --task-definition lauv-gateway-task \
+  --desired-count 2 \
+  --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={
+    subnets=[subnet-xxx,subnet-yyy],
+    securityGroups=[sg-ecs-app],
+    assignPublicIp=DISABLED
+  }" \
+  --load-balancers "targetGroupArn=arn:aws:elasticloadbalancing:...,containerName=gateway,containerPort=80"
+```
+
+---
+
+## Phase 10: Application Load Balancer, Route 53 & TLS (ACM)
+
+### Goal
+Expose application securely via HTTPS with custom domain `https://app.lauv.in`.
+
+### Why This Matters
+- Central SSL/TLS termination managed by AWS
+- Path-based routing enables future microservices
+- HTTPS required for modern web applications (PWA, secure cookies)
+- Route 53 provides reliable DNS with health checks
+
+### Tasks
+
+#### Request ACM Certificate
+```bash
+aws acm request-certificate \
+  --domain-name app.lauv.in \
+  --validation-method DNS \
+  --region us-east-1
+```
+
+Steps:
+1. Copy DNS validation records from ACM console
+2. Add CNAME records to Route 53 hosted zone for lauv.in
+3. Wait for certificate status to become "Issued"
+
+#### Create Application Load Balancer
+
+**Create ALB**
+```bash
+aws elbv2 create-load-balancer \
+  --name lauv-prod-alb \
+  --subnets subnet-public1 subnet-public2 \
+  --security-groups sg-alb \
+  --scheme internet-facing \
+  --type application \
+  --ip-address-type ipv4
+```
+
+#### Target Groups
+
+**Gateway Target Group**
+```bash
+aws elbv2 create-target-group \
+  --name tg-lauv-gateway \
+  --protocol HTTP \
+  --port 80 \
+  --vpc-id vpc-xxx \
+  --target-type ip \
+  --health-check-enabled \
+  --health-check-path / \
+  --health-check-interval-seconds 30 \
+  --health-check-timeout-seconds 5 \
+  --healthy-threshold-count 2 \
+  --unhealthy-threshold-count 3
+```
+
+#### ALB Listener Configuration
+
+**HTTPS Listener (Port 443)**
+```bash
+aws elbv2 create-listener \
+  --load-balancer-arn <alb-arn> \
+  --protocol HTTPS \
+  --port 443 \
+  --certificates CertificateArn=<acm-cert-arn> \
+  --default-actions Type=forward,TargetGroupArn=<tg-gateway-arn>
+```
+
+**HTTP Listener (Port 80) - Redirect to HTTPS**
+```bash
+aws elbv2 create-listener \
+  --load-balancer-arn <alb-arn> \
+  --protocol HTTP \
+  --port 80 \
+  --default-actions Type=redirect,RedirectConfig="{
+    Protocol=HTTPS,
+    Port=443,
+    StatusCode=HTTP_301
+  }"
+```
+
+#### Update Gateway ECS Service with Load Balancer
+```bash
+aws ecs update-service \
+  --cluster lauv-prod-cluster \
+  --service lauv-gateway-service \
+  --load-balancers "targetGroupArn=<tg-gateway-arn>,containerName=gateway,containerPort=80"
+```
+
+#### Route 53 Configuration
+```bash
+aws route53 change-resource-record-sets \
+  --hosted-zone-id <zone-id> \
+  --change-batch '{
+    "Changes": [{
+      "Action": "CREATE",
+      "ResourceRecordSet": {
+        "Name": "app.lauv.in",
+        "Type": "A",
+        "AliasTarget": {
+          "HostedZoneId": "<alb-hosted-zone-id>",
+          "DNSName": "<alb-dns-name>",
+          "EvaluateTargetHealth": true
+        }
+      }
+    }]
+  }'
+```
+
+#### Traffic Flow
+```
+User → HTTPS (443) → Route 53 (app.lauv.in) → ALB → Target Group → Gateway Service → Frontend/Backend Services
+```
+
+---
+
+## Phase 11: Secrets Management via SSM Parameter Store
+
+### Goal
+Eliminate hardcoded secrets from images, code, and version control.
+
+### Why This Matters
+- Central, encrypted storage for sensitive configuration
+- Secrets rotatable without redeploying code
+- Audit trail for secret access
+- Follows AWS security best practices
+
+### Tasks
+
+#### Store Parameters in SSM
+```bash
+aws ssm put-parameter \
+  --name "/lauv/prod/MONGO_URI" \
+  --value "mongodb+srv://username:password@cluster.mongodb.net/lauv" \
+  --type SecureString \
+  --key-id alias/aws/ssm
+
+aws ssm put-parameter \
+  --name "/lauv/prod/JWT_SECRET" \
+  --value "your-secure-jwt-secret-min-32-chars" \
+  --type SecureString \
+  --key-id alias/aws/ssm
+
+aws ssm put-parameter \
+  --name "/lauv/prod/PAYPAL_CLIENT_ID" \
+  --value "your-paypal-client-id" \
+  --type SecureString \
+  --key-id alias/aws/ssm
+
+aws ssm put-parameter \
+  --name "/lauv/prod/PAYPAL_CLIENT_SECRET" \
+  --value "your-paypal-client-secret" \
+  --type SecureString \
+  --key-id alias/aws/ssm
+```
+
+#### Update Task Execution Role Policy
+Already covered in Phase 9. Ensure the policy includes:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ],
+      "Resource": "arn:aws:ssm:us-east-1:<account-id>:parameter/lauv/prod/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:<account-id>:key/*"
+    }
+  ]
+}
+```
+
+#### Reference in Task Definition
+Already implemented in backend task definition (Phase 9):
+
+```json
+"secrets": [
+  {
+    "name": "MONGO_URI",
+    "valueFrom": "arn:aws:ssm:us-east-1:<account-id>:parameter/lauv/prod/MONGO_URI"
+  },
+  {
+    "name": "JWT_SECRET",
+    "valueFrom": "arn:aws:ssm:us-east-1:<account-id>:parameter/lauv/prod/JWT_SECRET"
+  },
+  {
+    "name": "PAYPAL_CLIENT_ID",
+    "valueFrom": "arn:aws:ssm:us-east-1:<account-id>:parameter/lauv/prod/PAYPAL_CLIENT_ID"
+  }
+]
+```
+
+#### Verification
+- Secrets injected at container runtime
+- Not visible in task definition JSON
+- Not baked into Docker images
+- Can rotate by updating SSM parameter and restarting tasks
+
+---
+
+## Phase 12: CI/CD Pipeline with GitHub Actions
+
+### Goal
+Automate build, security scan, push, and deployment on every commit to main branch.
+
+### Why This Matters
+- Consistent, repeatable deployment process
+- No manual steps reduces human error
+- Trivy scanning enforces security gates
+- Fast feedback loop for developers
+
+### Tasks
+
+#### Create Workflow File
+Located at `.github/workflows/deploy.yml`
+
+```yaml
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: <account-id>.dkr.ecr.us-east-1.amazonaws.com
+  BACKEND_IMAGE: lauv-backend
+  FRONTEND_IMAGE: lauv-frontend
+  GATEWAY_IMAGE: lauv-nginx-gateway
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build backend image
+        run: |
+          docker build -t ${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }} \
+            -f dockerfile .
+          docker tag ${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }} \
+            ${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE }}:latest
+
+      - name: Scan backend image with Trivy
+        uses: aquasecurity/trivy-action@v0.24.0
+        with:
+          image-ref: ${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 1
+
+      - name: Push backend image
+        run: |
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE }}:latest
+
+      - name: Build frontend image
+        run: |
+          docker build -t ${{ env.ECR_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }} \
+            -f frontend/dockerfile ./frontend
+          docker tag ${{ env.ECR_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }} \
+            ${{ env.ECR_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:latest
+
+      - name: Scan frontend image with Trivy
+        uses: aquasecurity/trivy-action@v0.24.0
+        with:
+          image-ref: ${{ env.ECR_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 1
+
+      - name: Push frontend image
+        run: |
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:latest
+
+      - name: Build gateway image
+        run: |
+          docker build -t ${{ env.ECR_REGISTRY }}/${{ env.GATEWAY_IMAGE }}:${{ github.sha }} \
+            -f gateway/dockerfile ./gateway
+          docker tag ${{ env.ECR_REGISTRY }}/${{ env.GATEWAY_IMAGE }}:${{ github.sha }} \
+            ${{ env.ECR_REGISTRY }}/${{ env.GATEWAY_IMAGE }}:latest
+
+      - name: Scan gateway image with Trivy
+        uses: aquasecurity/trivy-action@v0.24.0
+        with:
+          image-ref: ${{ env.ECR_REGISTRY }}/${{ env.GATEWAY_IMAGE }}:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 1
+
+      - name: Push gateway image
+        run: |
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.GATEWAY_IMAGE }}:${{ github.sha }}
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.GATEWAY_IMAGE }}:latest
+
+      - name: Update ECS services
+        run: |
+          aws ecs update-service --cluster lauv-prod-cluster \
+            --service lauv-backend-service --force-new-deployment
+          
+          aws ecs update-service --cluster lauv-prod-cluster \
+            --service lauv-frontend-service --force-new-deployment
+          
+          aws ecs update-service --cluster lauv-prod-cluster \
+            --service lauv-gateway-service --force-new-deployment
+
+      - name: Wait for services to stabilize
+        run: |
+          aws ecs wait services-stable --cluster lauv-prod-cluster \
+            --services lauv-backend-service lauv-frontend-service lauv-gateway-service
+```
+
+#### GitHub Secrets Configuration
+Add to repository secrets (Settings → Secrets and variables → Actions):
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+
+Create IAM user with policies:
+- `AmazonEC2ContainerRegistryPowerUser`
+- `AmazonECS_FullAccess`
+
+#### Pipeline Flow
+```
+Commit to main → Build Images → Trivy Scan → Push to ECR → Force ECS Deployment → Rolling Update
+```
+
+#### Rollback Strategy
+To rollback to previous version:
+```bash
+# Find previous task definition revision
+aws ecs describe-task-definition --task-definition lauv-backend-task
+
+# Update service to use previous revision
+aws ecs update-service \
+  --cluster lauv-prod-cluster \
+  --service lauv-backend-service \
+  --task-definition lauv-backend-task:PREVIOUS_REVISION
+```
+
+---
+
+## Phase 13: CloudWatch Logs & Metrics (Basic Observability)
+
+### Goal
+Implement minimum viable observability: centralized logs and key performance metrics.
+
+### Why This Matters
+- Debug production issues without SSH access
+- Track application health and performance trends
+- Foundation for alerting and autoscaling decisions
+- Required for production readiness
+
+### Tasks
+
+#### Configure CloudWatch Log Groups
+Already configured in task definitions (Phase 9). Set retention policies:
+
+```bash
+aws logs put-retention-policy \
+  --log-group-name /ecs/lauv-backend \
+  --retention-in-days 30
+
+aws logs put-retention-policy \
+  --log-group-name /ecs/lauv-frontend \
+  --retention-in-days 30
+
+aws logs put-retention-policy \
+  --log-group-name /ecs/lauv-gateway \
+  --retention-in-days 30
+```
+
+#### Create CloudWatch Alarms
+
+**High 5xx Error Rate**
+```bash
+aws cloudwatch put-metric-alarm \
+  --alarm-name lauv-alb-high-5xx \
+  --alarm-description "Alert on high 5xx errors from ALB" \
+  --metric-name HTTPCode_Target_5XX_Count \
+  --namespace AWS/ApplicationELB \
+  --statistic Sum \
+  --period 300 \
+  --evaluation-periods 2 \
+  --threshold 10 \
+  --comparison-operator GreaterThanThreshold \
+  --dimensions Name=LoadBalancer,Value=app/lauv-prod-alb/xxx
+```
+
+**High CPU Utilization - Backend**
+```bash
+aws cloudwatch put-metric-alarm \
+  --alarm-name lauv-backend-high-cpu \
+  --alarm-description "Alert on sustained high CPU" \
+  --metric-name CPUUtilization \
+  --namespace AWS/ECS \
+  --statistic Average \
+  --period 300 \
+  --evaluation-periods 3 \
+  --threshold 70 \
+  --comparison-operator GreaterThanThreshold \
+  --dimensions Name=ClusterName,Value=lauv-prod-cluster Name=ServiceName,Value=lauv-backend-service
+```
+
+**High Memory Utilization - Backend**
+```bash
+aws cloudwatch put-metric-alarm \
+  --alarm-name lauv-backend-high-memory \
+  --alarm-description "Alert on sustained high memory usage" \
+  --metric-name MemoryUtilization \
+  --namespace AWS/ECS \
+  --statistic Average \
+  --period 300 \
+  --evaluation-periods 3 \
+  --threshold 80 \
+  --comparison-operator GreaterThanThreshold \
+  --dimensions Name=ClusterName,Value=lauv-prod-cluster Name=ServiceName,Value=lauv-backend-service
+```
+
+**Target Response Time**
+```bash
+aws cloudwatch put-metric-alarm \
+  --alarm-name lauv-alb-slow-response \
+  --alarm-description "Alert on slow target response times" \
+  --metric-name TargetResponseTime \
+  --namespace AWS/ApplicationELB \
+  --statistic Average \
+  --period 300 \
+  --evaluation-periods 2 \
+  --threshold 2.0 \
+  --comparison-operator GreaterThanThreshold \
+  --dimensions Name=LoadBalancer,Value=app/lauv-prod-alb/xxx
+```
+
+#### SNS Topic for Alerts
+```bash
+# Create SNS topic
+aws sns create-topic --name lauv-prod-alerts
+
+# Subscribe email
+aws sns subscribe \
+  --topic-arn arn:aws:sns:us-east-1:<account-id>:lauv-prod-alerts \
+  --protocol email \
+  --notification-endpoint your-email@example.com
+
+# Update alarms to send to SNS
+aws cloudwatch put-metric-alarm \
+  --alarm-name lauv-alb-high-5xx \
+  --alarm-actions arn:aws:sns:us-east-1:<account-id>:lauv-prod-alerts
+```
+
+#### Key Metrics to Monitor
+- ALB request count and latency
+- Target response time
+- HTTP 4xx and 5xx error counts
+- ECS CPU and memory utilization
+- Task health status
+- Active connection count
+
+#### CloudWatch Insights Queries
+
+**Backend Error Logs**
+```
+fields @timestamp, @message
+| filter @message like /ERROR/
+| sort @timestamp desc
+| limit 100
+```
+
+**API Response Times**
+```
+fields @timestamp, @message
+| parse @message /method=(?<method>\w+) path=(?<path>[^\s]+) status=(?<status>\d+) duration=(?<duration>\d+)/
+| stats avg(duration), max(duration), p95(duration) by path
+```
+
+---
+
+## Phase 14: Prometheus & Grafana (Advanced Observability)
+
+### Goal
+Implement application-level metrics collection and visualization for deep insights.
+
+### Why This Matters
+- CloudWatch provides infrastructure metrics, Prometheus provides application metrics
+- Grafana dashboards are more developer-friendly and customizable
+- Industry standard for modern observability
+- Real-time monitoring of business metrics
+
+### Tasks
+
+#### Deploy Monitoring Stack
+
+**Option 1: Fargate Task (Recommended)**
+
+Create `infra/monitoring-task-definition.json`:
+
+```json
+{
+  "family": "lauv-monitoring-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::<account-id>:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "prometheus",
+      "image": "prom/prometheus:latest",
+      "portMappings": [
+        {
+          "containerPort": 9090,
+          "protocol": "tcp"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "prometheus-config",
+          "containerPath": "/etc/prometheus"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/lauv-monitoring",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "prometheus"
+        }
+      }
+    },
+    {
+      "name": "grafana",
+      "image": "grafana/grafana:latest",
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {"name": "GF_SECURITY_ADMIN_PASSWORD", "value": "changeme"},
+        {"name": "GF_SERVER_ROOT_URL", "value": "http://monitoring.lauv.in"}
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/lauv-monitoring",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "grafana"
+        }
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "name": "prometheus-config",
+      "host": {}
+    }
+  ]
+}
+```
+
+**Option 2: EC2 Instance**
+- Launch t3.small in private subnet
+- Install Docker and Docker Compose
+- Run Prometheus + Grafana containers
+
+#### Prometheus Configuration
+Create `infra/prometheus.yml`:
+
+```yaml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'nginx-gateway'
+    static_configs:
+      - targets: ['gateway-service.local:9113']
+    
+  - job_name: 'backend-app'
+    static_configs:
+      - targets: ['backend-service.local:9090']
+    
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['backend-service.local:9100']
+```
+
+#### Instrument Backend Application
+Install Prometheus client:
+
+```bash
+npm install prom-client
+```
+
+Add to `backend/server.js`:
+
+```javascript
+const promClient = require('prom-client');
+
+// Create a Registry
+const register = new promClient.Registry();
+promClient.collectDefaultMetrics({ register });
+
+// Create custom metrics
+const httpRequestDuration = new promClient.Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'Duration of HTTP requests in seconds',
+  labelNames: ['method', 'route', 'status_code'],
+  registers: [register]
+});
+
+const httpRequestTotal = new promClient.Counter({
+  name: 'http_requests_total',
+  help: 'Total number of HTTP requests',
+  labelNames: ['method', 'route', 'status_code'],
+  registers: [register]
+});
+
+// Middleware to track metrics
+app.use((req, res, next) => {
+  const start = Date.now();
+  
+  res.on('finish', () => {
+    const duration = (Date.now() - start) / 1000;
+    const route = req.route ? req.route.path : req.path;
+    
+    httpRequestDuration
+      .labels(req.method, route, res.statusCode)
+      .observe(duration);
+    
+    httpRequestTotal
+      .labels(req.method, route, res.statusCode)
+      .inc();
+  });
+  
+  next();
+});
+
+// Expose metrics endpoint
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', register.contentType);
+  res.end(await register.metrics());
+});
+```
+
+#### Nginx Metrics Exporter
+Update `gateway/dockerfile`:
+
+```dockerfile
+FROM nginx:alpine
+
+# Install nginx-prometheus-exporter
+RUN apk add --no-cache wget && \
+    wget https://github.com/nginxinc/nginx-prometheus-exporter/releases/download/v0.11.0/nginx-prometheus-exporter_0.11.0_linux_amd64.tar.gz && \
+    tar xzf nginx-prometheus-exporter_0.11.0_linux_amd64.tar.gz && \
+    mv nginx-prometheus-exporter /usr/local/bin/ && \
+    rm nginx-prometheus-exporter_0.11.0_linux_amd64.tar.gz
+
+RUN rm /etc/nginx/conf.d/default.conf
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80 9113
+
+# Start nginx and exporter
+CMD nginx && nginx-prometheus-exporter -nginx.scrape-uri=http://localhost:80/stub_status
+```
+
+Update `gateway/nginx.conf` to enable stub_status:
+
+```nginx
+server {
+    listen 80;
+    server_name _;
+
+    location /stub_status {
+        stub_status on;
+        access_log off;
+        allow 127.0.0.1;
+        deny all;
+    }
+
+    # ... rest of config
+}
+```
+
+#### Grafana Dashboards
+
+**Import Pre-built Dashboards**
+1. Nginx metrics dashboard: ID 12708
+2. Node.js application metrics: ID 11159
+3. ECS container metrics: ID 551
+
+**Create Custom Dashboard**
+
+Panels to include:
+- Request rate by endpoint (graph)
+- Response time percentiles p50, p95, p99 (graph)
+- Error rate by status code (graph)
+- Active user sessions (stat)
+- Database query duration (heatmap)
+- HTTP request distribution (bar chart)
+
+Sample Prometheus queries:
+
+```promql
+# Request rate
+rate(http_requests_total[5m])
+
+# Response time p95
+histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
+
+# Error rate
+rate(http_requests_total{status_code=~"5.."}[5m])
+```
+
+#### Access Grafana Securely
+
+**Option 1: Internal ALB**
+- Create internal ALB in private subnets
+- Connect via VPN or bastion host
+
+**Option 2: AWS Systems Manager Port Forwarding**
+```bash
+aws ssm start-session \
+  --target <ecs-task-id> \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["3000"],"localPortNumber":["3000"]}'
+```
+
+Access at `http://localhost:3000`
+
+---
+
+## Phase 15: Reliability, Scaling & Operational Runbooks
+
+### Goal
+Transform deployment into a reliable, scalable production system with documented operational procedures.
+
+### Why This Matters
+- Autoscaling handles traffic spikes automatically
+- Health checks prevent routing to unhealthy tasks
+- Runbooks reduce mean-time-to-recovery during incidents
+- Cost optimization prevents budget overruns
+
+### Tasks
+
+#### ECS Service Autoscaling
+
+**Target Tracking Policy (CPU-based)**
+```bash
+# Register scalable target
+aws application-autoscaling register-scalable-target \
+  --service-namespace ecs \
+  --resource-id service/lauv-prod-cluster/lauv-backend-service \
+  --scalable-dimension ecs:service:DesiredCount \
+  --min-capacity 2 \
+  --max-capacity 10
+
+# Create scaling policy
+aws application-autoscaling put-scaling-policy \
+  --service-namespace ecs \
+  --resource-id service/lauv-prod-cluster/lauv-backend-service \
+  --scalable-dimension ecs:service:DesiredCount \
+  --policy-name cpu-target-tracking \
+  --policy-type TargetTrackingScaling \
+  --target-tracking-scaling-policy-configuration '{
+    "TargetValue": 70.0,
+    "PredefinedMetricSpecification": {
+      "PredefinedMetricType": "ECSServiceAverageCPUUtilization"
+    },
+    "ScaleInCooldown": 300,
+    "ScaleOutCooldown": 60
+  }'
+```
+
+**Request Count Based Scaling**
+```bash
+aws application-autoscaling put-scaling-policy \
+  --service-namespace ecs \
+  --resource-id service/lauv-prod-cluster/lauv-gateway-service \
+  --scalable-dimension ecs:service:DesiredCount \
+  --policy-name request-count-scaling \
+  --policy-type TargetTrackingScaling \
+  --target-tracking-scaling-policy-configuration '{
+    "TargetValue": 1000.0,
+    "PredefinedMetricSpecification": {
+      "PredefinedMetricType": "ALBRequestCountPerTarget",
+      "ResourceLabel": "app/lauv-prod-alb/xxx/targetgroup/tg-lauv-gateway/yyy"
+    }
+  }'
+```
+
+#### Health Checks
+
+**Backend Health Check Endpoint**
+Add to `backend/server.js`:
+
+```javascript
+app.get('/api/health', async (req, res) => {
+  try {
+    // Check MongoDB connection
+    await mongoose.connection.db.admin().ping();
+    
+    res.status(200).json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      mongodb: 'connected'
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'unhealthy',
+      error: error.message
+    });
+  }
+});
+```
+
+**Update Target Group Health Check**
+```bash
+aws elbv2 modify-target-group \
+  --target-group-arn <tg-gateway-arn> \
+  --health-check-path /api/health \
+  --health-check-interval-seconds 30 \
+  --health-check-timeout-seconds 5 \
+  --healthy-threshold-count 2 \
+  --unhealthy-threshold-count 3
+```
+
+#### Operational Runbooks
+
+**Runbook 1: Rollback Deployment**
+
+When to use: New deployment causing errors or performance issues
+
+Steps:
+```bash
+# 1. Find previous working task definition revision
+aws ecs describe-task-definition --task-definition lauv-backend-task
+
+# 2. Update service to previous revision
+aws ecs update-service \
+  --cluster lauv-prod-cluster \
+  --service lauv-backend-service \
+  --task-definition lauv-backend-task:PREVIOUS_REVISION
+
+# 3. Monitor rollback
+aws ecs describe-services \
+  --cluster lauv-prod-cluster \
+  --services lauv-backend-service
+
+# 4. Verify health
+curl https://app.lauv.in/api/health
+```
+
+**Runbook 2: Restart Service**
+
+When to use: Service frozen, memory leaks, unresponsive
+
+Steps:
+```bash
+# Force new deployment (graceful restart)
+aws ecs update-service \
+  --cluster lauv-prod-cluster \
+  --service lauv-backend-service \
+  --force-new-deployment
+
+# OR stop all tasks (ECS will start new ones)
+aws ecs list-tasks --cluster lauv-prod-cluster \
+  --service-name lauv-backend-service \
+  --query 'taskArns[]' --output text | \
+  xargs -n1 aws ecs stop-task --cluster lauv-prod-cluster --task
+```
+
+**Runbook 3: Scale Service Manually**
+
+When to use: Expected traffic spike, emergency scaling
+
+Steps:
+```bash
+# Scale up to 10 tasks
+aws ecs update-service \
+  --cluster lauv-prod-cluster \
+  --service lauv-backend-service \
+  --desired-count 10
+
+# Scale down to 2 tasks
+aws ecs update-service \
+  --cluster lauv-prod-cluster \
+  --service lauv-backend-service \
+  --desired-count 2
+```
+
+**Runbook 4: Rotate Secrets**
+
+When to use: Security breach, regular rotation policy
+
+Steps:
+```bash
+# 1. Update secret in SSM
+aws ssm put-parameter \
+  --name "/lauv/prod/JWT_SECRET" \
+  --value "new-secure-secret" \
+  --type SecureString \
+  --overwrite
+
+# 2. Force service restart to pick up new secret
+aws ecs update-service \
+  --cluster lauv-prod-cluster \
+  --service lauv-backend-service \
+  --force-new-deployment
+
+# 3. Verify new secret is loaded
+aws ecs execute-command \
+  --cluster lauv-prod-cluster \
+  --task <task-id> \
+  --container backend \
+  --command "/bin/sh" \
+  --interactive
+# Then: echo $JWT_SECRET
+```
+
+**Runbook 5: Debug Failed Deployment**
+
+When to use: Deployment stuck, tasks failing to start
+
+Steps:
+```bash
+# 1. Check service events
+aws ecs describe-services \
+  --cluster lauv-prod-cluster \
+  --services lauv-backend-service \
+  --query 'services[0].events[0:10]'
+
+# 2. Check task stopped reason
+aws ecs describe-tasks \
+  --cluster lauv-prod-cluster \
+  --tasks <task-id> \
+  --query 'tasks[0].stoppedReason'
+
+# 3. Check CloudWatch logs
+aws logs tail /ecs/lauv-backend --follow
+
+# 4. Common issues:
+#    - Image pull errors: Check ECR permissions
+#    - Health check failures: Check /api/health endpoint
+#    - Resource constraints: Increase CPU/memory in task def
+#    - Secret access errors: Check task execution role
+```
+
+#### Cost Optimization
+
+**Current Monthly Cost Estimate**
+- ALB: $16-20
+- NAT Gateway: $32-45 (with data transfer)
+- Fargate tasks (2x256/512): $15-20
+- ECR storage: $1-2
+- CloudWatch logs: $5-10
+- MongoDB Atlas: $57 (M10 tier)
+- Route 53: $0.50
+- ACM: Free
+
+**Total: ~$125-155/month**
+
+**Optimization Strategies**
+1. Use single NAT Gateway instead of one per AZ (reduce $32/month)
+2. Implement CloudWatch log filtering to reduce ingestion
+3. Use ECR lifecycle policies to delete old images
+4. Consider Reserved Capacity for Fargate if traffic is predictable
+5. Use AWS Compute Savings Plans for 20-30% discount
+6. Monitor idle resources with AWS Cost Explorer
+
+**Cost Monitoring**
+```bash
+# Create budget alert
+aws budgets create-budget \
+  --account-id <account-id> \
+  --budget '{
+    "BudgetName": "lauv-monthly-budget",
+    "BudgetLimit": {
+      "Amount": "200",
+      "Unit": "USD"
+    },
+    "TimeUnit": "MONTHLY",
+    "BudgetType": "COST"
+  }' \
+  --notifications-with-subscribers '[{
+    "Notification": {
+      "NotificationType": "ACTUAL",
+      "ComparisonOperator": "GREATER_THAN",
+      "Threshold": 80
+    },
+    "Subscribers": [{
+      "SubscriptionType": "EMAIL",
+      "Address": "your-email@example.com"
+    }]
+  }]'
+```
+
+#### Disaster Recovery
+
+**Backup Strategy**
+- MongoDB Atlas: automatic daily backups (enabled by default)
+- ECS task definitions: stored in S3 or version control
+- Docker images: stored in ECR with lifecycle policies
+- Infrastructure as Code: stored in Git repository
+
+**Recovery Time Objective (RTO)**
+- Service restart: 2-3 minutes
+- Rollback deployment: 5-10 minutes
+- Full infrastructure rebuild: 30-60 minutes
+
+**Recovery Point Objective (RPO)**
+- Database: 1 hour (Atlas continuous backup)
+- Application state: near-zero (stateless services)
+
+---
+
+## Summary & Next Steps
+
+### What We've Built
+A production-grade, scalable e-commerce platform with:
+- Multi-tier architecture (gateway, frontend, backend)
+- Automated CI/CD pipeline
+- Security scanning and secrets management
+- Comprehensive monitoring and alerting
+- Auto-scaling and high availability
+- Operational runbooks for incident response
+
+### Deployment Checklist
+- [ ] Phase 1: Repository structure and branching
+- [ ] Phase 2: Backend Dockerization
+- [ ] Phase 3: Frontend Dockerization
+- [ ] Phase 4: Gateway Dockerization
+- [ ] Phase 5: Local Docker Compose testing
+- [ ] Phase 6: Trivy security scanning
+- [ ] Phase 7: AWS networking (VPC, subnets, security groups)
+- [ ] Phase 8: ECR repositories and image push
+- [ ] Phase 9: ECS Fargate cluster and task definitions
+- [ ] Phase 10: ALB, Route 53, and ACM certificate
+- [ ] Phase 11: SSM Parameter Store secrets
+- [ ] Phase 12: GitHub Actions CI/CD pipeline
+- [ ] Phase 13: CloudWatch logs and alarms
+- [ ] Phase 14: Prometheus and Grafana
+- [ ] Phase 15: Autoscaling and runbooks
+
+### Future Enhancements
+1. Blue/Green deployments for zero-downtime releases
+2. AWS WAF for application-layer DDoS protection
+3. ElastiCache (Redis) for session management and caching
+4. S3 + CloudFront for static asset delivery
+5. AWS Backup for automated disaster recovery
+6. Infrastructure as Code (Terraform or CloudFormation)
+7. Multi-region deployment for global availability
+8. Chaos engineering with AWS Fault Injection Simulator
+9. Cost optimization with Spot instances for non-critical workloads
+10. Advanced security with AWS GuardDuty and Security Hub
+
+### Support and Maintenance
+- Monitor CloudWatch alarms daily
+- Review CloudWatch Insights weekly for error patterns
+- Update Docker base images monthly for security patches
+- Rotate secrets quarterly
+- Review and optimize costs monthly
+- Test disaster recovery procedures quarterly
+- Update runbooks after each incident
+
+---
+
+**Documentation Version**: 1.0  
+**Last Updated**: November 2024  
+**Maintained By**: DevOps Team
