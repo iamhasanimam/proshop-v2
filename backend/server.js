@@ -10,9 +10,11 @@ import orderRoutes from './routes/orderRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 
-const port = process.env.PORT || 5000;
+console.log("MONGO_URI:", process.env.MONGO_URI);
 
 connectDB();
+
+const port = process.env.PORT || 5000;
 
 const app = express();
 

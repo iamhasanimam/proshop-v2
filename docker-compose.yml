@@ -1,0 +1,38 @@
+networks:
+  public_net:
+    driver: bridge
+  app_net:
+    driver: bridge
+
+volumes:
+  uploads-data:
+
+services:
+  gateway:
+    build: ./gateway
+    ports:
+      - "8080:80"
+    depends_on:
+      - frontend-service
+      - backend-service
+    networks:
+      - public_net
+      - app_net
+    
+  frontend-service:
+    build: ./frontend
+    expose:
+      - "80"
+    networks:
+      - app_net
+  
+  backend-service:
+    build: .
+    expose:
+      - "5000"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - uploads-data:/var/data/uploads
+    networks:
+      - app_net

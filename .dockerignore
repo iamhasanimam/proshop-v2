@@ -1,0 +1,41 @@
+# Ignore dependencies
+node_modules
+*/node_modules
+
+# Logs
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+*.log
+
+# Git repo
+.git
+.gitignore
+
+# Env files (DO NOT COPY SECRETS)
+.env
+*.env
+
+# Dockerfiles
+dockerfile
+Dockerfile
+Dockerfile.*
+
+# Frontend folder (NOT needed for backend image)
+frontend/
+
+# Local build folders
+dist/
+build/
+
+# System / editor junk
+.DS_Store
+.vscode
+.idea
+
+# OS files
+Thumbs.db
+
+# Cache
+.pnpm-store/
+.cache/
