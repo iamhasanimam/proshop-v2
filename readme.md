@@ -1,5 +1,3 @@
-# 15-Phase Production Deployment Plan for lauv.in
-
 # Deployment of Ecommerce App on ECS 
 
 ![alt text](ECS-Architecture.png)
