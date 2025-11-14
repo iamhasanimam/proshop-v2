@@ -1,4 +1,4 @@
-# Deployment of Ecommerce App on ECS 
+# Deployment of Ecommerce App on AWS Cloud with ECS CICD and Observability
 
 ![alt text](ECS-Architecture.png)
 
@@ -313,9 +313,7 @@ JWT_SECRET=your_jwt_secret_key
 - Review logs: `docker-compose logs -f backend-service`
 
 <img src="./screenshots/image.png">
-
 Symlink works upload of files on containers successful 
-
 <img src="./screenshots/symlink.png">
 ---
 
